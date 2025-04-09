@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pose Detection with Feedback</title>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+      font-family: Arial, sans-serif;
+    }
+    .section {
+      margin: 20px;
+      padding: 20px;
+      width: 100%;
+      max-width: 800px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      background-color: white;
+      border-radius: 5px;
+    }
+    .container {
+      position: relative;
+      width: 100%;
+    }
+    #video, #canvas {
+      width: 100%;
+      height: auto;
+    }
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #feedback {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 5px;
+      font-size: 20px;
+    }
+    #controls, #upload-controls {
+      text-align: center;
+      margin-top: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      height: 50px;
+      width: 200px;
+      border-radius: 4px;
+    }
+    select, input[type="file"] {
+      font-size: 18px;
+      height: 50px;
+      width: 200px;
+      text-align: center;
+      margin: 10px 0;
+    }
+    #processed-video {
+      width: 100%;
+      max-width: 800px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Webcam Section -->
+  <div class="section">
+    <h2>Real-time Webcam Detection</h2>
+    <div class="container">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="canvas"></canvas>
+      <div id="feedback">Select a pose and start detection</div>
+    </div>
+    <div id="controls">
+      <select id="pose-select">
+        <option value="1">Lunge</option>
+        <option value="2">Sit-up</option>
+      </select>
+      <br>
+      <button id="download-btn">Download Log</button>
+    </div>
+  </div>
+
+  <!-- Video Upload Section -->
+  <div class="section">
+    <h2>Upload Video for Processing</h2>
+    <div id="upload-controls">
+      <select id="upload-pose-select">
+        <option value="1">Lunge</option>
+        <option value="2">Sit-up</option>
+      </select>
+      <br>
+      <input type="file" id="video-upload" accept="video/*">
+      <br>
+      <button id="upload-btn">Upload and Process</button>
+    </div>
+    <video id="processed-video" controls></video>
+  </div>
+
+  <!-- Load MediaPipe Pose and Drawing Utilities -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script>
+    let logData = [];
+    let poseId = 1;
+
+    // Function to calculate angle between three points
+    function calculateAngle(a, b, c) {
+      const vector1 = [a.x - b.x, a.y - b.y];
+      const vector2 = [c.x - b.x, c.y - b.y];
+      const dotProduct = vector1[0] * vector2[0] + vector1[1] * vector2[1];
+      const magnitude1 = Math.sqrt(vector1[0] ** 2 + vector1[1] ** 2);
+      const magnitude2 = Math.sqrt(vector2[0] ** 2 + vector2[1] ** 2);
+      const angle = Math.acos(dotProduct / (magnitude1 * magnitude2)) * (180 / Math.PI);
+      return angle;
+    }
+
+    // Function to detect lunge
+    function detectLunge(leftKneeAngle, rightKneeAngle) {
+      if (leftKneeAngle > 80 && leftKneeAngle < 110 && rightKneeAngle > 80 && rightKneeAngle < 110) {
+        return "Lunge Detected: Correct";
+      } else {
+        return "Incorrect Lunge or No Lunge";
+      }
+    }
+
+    // Function to detect sit-up
+    function detectSitUp(leftKneeAngle, rightKneeAngle) {
+      if (leftKneeAngle < 70 && rightKneeAngle < 70) {
+        return "Sit-up Detected: Correct";
+      } else {
+        return "Incorrect Sit-Up or No Sit-Up";
+      }
+    }
+
+    // Webcam Detection
+    async function initWebcam() {
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const feedbackDiv = document.getElementById('feedback');
+      const poseSelect = document.getElementById('pose-select');
+      const downloadBtn = document.getElementById('download-btn');
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+      } catch (err) {
+        console.error('Error accessing camera:', err);
+        feedbackDiv.textContent = 'Camera access is required.';
+        return;
+      }
+
+      video.onloadedmetadata = () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const pose = new Pose({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+        });
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+        pose.onResults(onResults);
+
+        async function processFrame() {
+          await pose.send({ image: video });
+          requestAnimationFrame(processFrame);
+        }
+        processFrame();
+      };
+
+      poseSelect.addEventListener('change', (event) => {
+        poseId = parseInt(event.target.value);
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        if (logData.length === 0) {
+          alert('No data to download.');
+          return;
+        }
+        const csvContent = "data:text/csv;charset=utf-8," 
+          + "Timestamp,Pose ID,Left Knee Angle,Right Knee Angle,Pose Status\n"
+          + logData.map(row => `${row.timestamp},${row.poseId},${row.leftKneeAngle},${row.rightKneeAngle},${row.poseStatus}`).join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "pose_log.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
+
+      function onResults(results) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (results.poseLandmarks) {
+          drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, { color: 'white', lineWidth: 4 });
+          drawLandmarks(ctx, results.poseLandmarks, { color: 'white', fillColor: 'rgb(255,138,0)', radius: 5 });
+
+          const landmarks = results.poseLandmarks;
+          const leftHip = landmarks[23];
+          const leftKnee = landmarks[25];
+          const leftAnkle = landmarks[27];
+          const rightHip = landmarks[24];
+          const rightKnee = landmarks[26];
+          const rightAnkle = landmarks[28];
+
+          const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+          const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+
+          let poseText = "";
+          if (poseId === 1) {
+            poseText = detectLunge(leftKneeAngle, rightKneeAngle);
+          } else if (poseId === 2) {
+            poseText = detectSitUp(leftKneeAngle, rightKneeAngle);
+          }
+
+          feedbackDiv.textContent = `Left Knee: ${leftKneeAngle.toFixed(1)}°, Right Knee: ${rightKneeAngle.toFixed(1)}° - ${poseText}`;
+
+          const timestamp = new Date().toISOString();
+          logData.push({
+            timestamp,
+            poseId,
+            leftKneeAngle: leftKneeAngle.toFixed(1),
+            rightKneeAngle: rightKneeAngle.toFixed(1),
+            poseStatus: poseText
+          });
+        } else {
+          feedbackDiv.textContent = "No pose detected";
+        }
+      }
+    }
+
+    // Video Upload Processing
+    function initUpload() {
+      const uploadBtn = document.getElementById('upload-btn');
+      const videoUpload = document.getElementById('video-upload');
+      const uploadPoseSelect = document.getElementById('upload-pose-select');
+      const processedVideo = document.getElementById('processed-video');
+
+      uploadBtn.addEventListener('click', async () => {
+        const file = videoUpload.files[0];
+        if (!file) {
+          alert('Please select a video file.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('video', file);
+        formData.append('pose_id', uploadPoseSelect.value);
+
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = 'Processing...';
+
+        try {
+          const response = await fetch('http://localhost:5000/process-video', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!response.ok) throw new Error('Processing failed');
+
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          processedVideo.src = url;
+          processedVideo.style.display = 'block';
+        } catch (error) {
+          console.error('Error:', error);
+          alert('Error processing video');
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Upload and Process';
+        }
+      });
+    }
+
+    // Initialize both sections
+    initWebcam();
+    initUpload();
+  </script>
+</body>
+</html>
